@@ -25,7 +25,8 @@ class _AddEditDialogState extends State<AddEditDialog> {
 
   late TodoPriority _priority;
   late TodoCategory _category;
-  DateTime? _dueDate;
+  DateTime? _dueDate; // tanggal saja (jam selalu 00:00, jam asli di _dueTime)
+  TimeOfDay? _dueTime;
   late List<String> _tags;
 
   bool get _isEdit => widget.todo != null;
@@ -39,8 +40,13 @@ class _AddEditDialogState extends State<AddEditDialog> {
     _tagController = TextEditingController();
     _priority = todo?.priority ?? TodoPriority.medium;
     _category = todo?.category ?? TodoCategory.other;
-    _dueDate = todo?.dueDate;
     _tags = List.from(todo?.tags ?? []);
+
+    if (todo?.dueDate != null) {
+      final d = todo!.dueDate!;
+      _dueDate = DateTime(d.year, d.month, d.day);
+      _dueTime = TimeOfDay(hour: d.hour, minute: d.minute);
+    }
   }
 
   @override
@@ -60,6 +66,39 @@ class _AddEditDialogState extends State<AddEditDialog> {
     }
   }
 
+  // Gabungkan _dueDate + _dueTime jadi satu DateTime lengkap.
+  // Kalau jam belum dipilih, default jam 23:59 (akhir hari) supaya
+  // notifikasi "2 jam sebelum" tetap masuk akal.
+  DateTime? get _combinedDueDateTime {
+    if (_dueDate == null) return null;
+    final time = _dueTime ?? const TimeOfDay(hour: 23, minute: 59);
+    return DateTime(
+      _dueDate!.year,
+      _dueDate!.month,
+      _dueDate!.day,
+      time.hour,
+      time.minute,
+    );
+  }
+
+  Future<void> _pickDate() async {
+    final date = await showDatePicker(
+      context: context,
+      initialDate: _dueDate ?? DateTime.now(),
+      firstDate: DateTime.now(),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+    );
+    if (date != null) setState(() => _dueDate = date);
+  }
+
+  Future<void> _pickTime() async {
+    final time = await showTimePicker(
+      context: context,
+      initialTime: _dueTime ?? TimeOfDay.now(),
+    );
+    if (time != null) setState(() => _dueTime = time);
+  }
+
   void _handleSave() {
     if (_titleController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -74,7 +113,7 @@ class _AddEditDialogState extends State<AddEditDialog> {
       title: _titleController.text.trim(),
       description: _descController.text.trim(),
       createdAt: _isEdit ? todo!.createdAt : DateTime.now(),
-      dueDate: _dueDate,
+      dueDate: _combinedDueDateTime,
       priority: _priority,
       category: _category,
       tags: _tags,
@@ -169,36 +208,67 @@ class _AddEditDialogState extends State<AddEditDialog> {
             ),
             const SizedBox(height: 16),
 
-            // Due Date Picker
-            InkWell(
-              onTap: () async {
-                final date = await showDatePicker(
-                  context: context,
-                  initialDate: _dueDate ?? DateTime.now(),
-                  firstDate: DateTime.now(),
-                  lastDate: DateTime.now().add(const Duration(days: 365)),
-                );
-                if (date != null) setState(() => _dueDate = date);
-              },
-              child: InputDecorator(
-                decoration: const InputDecoration(
-                  labelText: 'Tanggal Jatuh Tempo',
-                  border: OutlineInputBorder(),
-                  suffixIcon: Icon(Icons.calendar_today),
+            // Due Date + Time Picker
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  flex: 3,
+                  child: InkWell(
+                    onTap: _pickDate,
+                    child: InputDecorator(
+                      decoration: const InputDecoration(
+                        labelText: 'Tanggal Jatuh Tempo',
+                        border: OutlineInputBorder(),
+                        suffixIcon: Icon(Icons.calendar_today),
+                      ),
+                      child: Text(
+                        _dueDate == null
+                            ? 'Pilih tanggal'
+                            : TodoHelpers.formatDate(_dueDate!),
+                      ),
+                    ),
+                  ),
                 ),
-                child: Text(
-                  _dueDate == null
-                      ? 'Pilih tanggal'
-                      : TodoHelpers.formatDate(_dueDate!),
+                const SizedBox(width: 8),
+                Expanded(
+                  flex: 2,
+                  child: InkWell(
+                    onTap: _dueDate == null ? null : _pickTime,
+                    child: InputDecorator(
+                      decoration: InputDecoration(
+                        labelText: 'Jam',
+                        border: const OutlineInputBorder(),
+                        suffixIcon: const Icon(Icons.access_time),
+                        enabled: _dueDate != null,
+                      ),
+                      child: Text(
+                        _dueTime == null ? '--:--' : _dueTime!.format(context),
+                      ),
+                    ),
+                  ),
                 ),
-              ),
+              ],
             ),
-            if (_dueDate != null)
+            if (_dueDate != null) ...[
+              const SizedBox(height: 4),
+              if (_dueTime == null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    'Belum pilih jam — pengingat akan dianggap jam 23:59',
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+                ),
               TextButton.icon(
-                onPressed: () => setState(() => _dueDate = null),
+                onPressed: () => setState(() {
+                  _dueDate = null;
+                  _dueTime = null;
+                }),
                 icon: const Icon(Icons.clear),
-                label: const Text('Hapus tanggal'),
+                label: const Text('Hapus tanggal & jam'),
               ),
+            ],
             const SizedBox(height: 16),
 
             // Tags

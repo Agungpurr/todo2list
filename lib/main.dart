@@ -1,7 +1,15 @@
 import 'package:flutter/material.dart';
-import 'pages/todo_list_page.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:flutter_quill/flutter_quill.dart'
+    show FlutterQuillLocalizations;
+import 'package:todo_app/pages/calender_page.dart';
+import 'package:intl/date_symbol_data_local.dart';
+import 'services/notification_service.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await initializeDateFormatting('id_ID', null);
+  await NotificationService.instance.init();
   runApp(const TodoApp());
 }
 
@@ -13,6 +21,16 @@ class TodoApp extends StatelessWidget {
     return MaterialApp(
       title: 'Todo List App',
       debugShowCheckedModeBanner: false,
+      localizationsDelegates: const [
+        FlutterQuillLocalizations.delegate,
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      supportedLocales: const [
+        Locale('id', 'ID'),
+        Locale('en', ''),
+      ],
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(
@@ -29,7 +47,7 @@ class TodoApp extends StatelessWidget {
         ),
         appBarTheme: const AppBarTheme(centerTitle: true, elevation: 2),
       ),
-      home: const TodoListPage(),
+      home: const CalendarPage(),
     );
   }
 }

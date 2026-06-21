@@ -11,10 +11,17 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  flutter_localizations: # <-- baru
+    sdk: flutter
   sqflite: ^2.3.0
   path: ^1.8.3
   uuid: ^4.3.3
-  intl: ^0.19.0
+  intl: ^0.20.2
+  table_calendar: ^3.1.2
+  flutter_quill: ^11.5.0
+  flutter_local_notifications: ^17.2.3
+  timezone: ^0.9.4
+  shared_preferences: ^2.3.2
 
 dev_dependencies:
   flutter_test:

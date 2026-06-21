@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 import '../models/todo.dart';
 import '../repositories/todo_repository.dart';
+import '../services/notification_service.dart';
 import '../utils/todo_helpers.dart';
 import '../widgets/add_edit_dialog.dart';
 import '../widgets/filter_dialog.dart';
@@ -19,6 +20,7 @@ class TodoListPage extends StatefulWidget {
 
 class _TodoListPageState extends State<TodoListPage> {
   final TodoRepository _repository = TodoRepository();
+  final NotificationService _notifService = NotificationService();
 
   List<Todo> _todos = [];
   bool _isLoading = true;
@@ -33,6 +35,12 @@ class _TodoListPageState extends State<TodoListPage> {
   void initState() {
     super.initState();
     _loadTodos();
+    // Reschedule semua reminder todo + refresh isi daily reminder setiap
+    // kali halaman utama dibuka. Ini fallback tambahan selain boot receiver,
+    // supaya kalau ada reminder yang ke-skip (misal HP mati lama), tetap
+    // ter-reschedule saat user buka app lagi.
+    _notifService.rescheduleAllTodoReminders();
+    _notifService.refreshDailyReminderIfEnabled();
   }
 
   // ===== DATA LOADING =====
@@ -98,6 +106,7 @@ class _TodoListPageState extends State<TodoListPage> {
   // ===== CRUD OPERATIONS =====
   Future<void> _addTodo(Todo todo) async {
     await _repository.insert(todo);
+    await _notifService.scheduleTodoReminders(todo);
     await _loadTodos();
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -111,6 +120,8 @@ class _TodoListPageState extends State<TodoListPage> {
 
   Future<void> _updateTodo(Todo todo) async {
     await _repository.update(todo);
+    // Reschedule (otomatis cancel yang lama dulu di dalam service)
+    await _notifService.scheduleTodoReminders(todo);
     await _loadTodos();
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -127,6 +138,7 @@ class _TodoListPageState extends State<TodoListPage> {
     if (!confirmed) return;
 
     await _repository.delete(todo.id);
+    await _notifService.cancelTodoReminders(todo.id);
     await _loadTodos();
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -139,7 +151,19 @@ class _TodoListPageState extends State<TodoListPage> {
   }
 
   Future<void> _toggleTodo(Todo todo) async {
-    await _repository.toggleCompleted(todo.id, !todo.isCompleted);
+    final newCompleted = !todo.isCompleted;
+    await _repository.toggleCompleted(todo.id, newCompleted);
+
+    // Kalau ditandai selesai, batalkan reminder yang masih nyangkut.
+    // Kalau dibatalkan selesainya lagi, dan masih punya dueDate, reminder
+    // dijadwalkan ulang.
+    if (newCompleted) {
+      await _notifService.cancelTodoReminders(todo.id);
+    } else if (todo.dueDate != null) {
+      final updated = todo.copyWith(isCompleted: false);
+      await _notifService.scheduleTodoReminders(updated);
+    }
+
     await _loadTodos();
   }
 
@@ -234,6 +258,8 @@ class _TodoListPageState extends State<TodoListPage> {
 
     return Scaffold(
       appBar: AppBar(
+        // Tombol kembali otomatis muncul (leading) karena halaman ini
+        // diakses lewat Navigator.push dari CalendarPage.
         title: const Text('📝 Todo List'),
         actions: [
           IconButton(
