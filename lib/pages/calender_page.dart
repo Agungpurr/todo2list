@@ -5,26 +5,40 @@ import 'package:table_calendar/table_calendar.dart';
 
 import '../models/todo.dart';
 import '../models/note.dart';
+import '../models/transaction.dart';
 import '../repositories/todo_repository.dart';
 import '../repositories/note_repository.dart';
+import '../repositories/transaction_repository.dart';
 import '../utils/todo_helpers.dart';
+
 import '../widgets/todo_card.dart';
 import '../widgets/note_card.dart';
+import '../widgets/transaction_card.dart';
 import '../widgets/add_edit_dialog.dart';
 import '../widgets/add_edit_note_dialog.dart';
+import '../widgets/add_edit_transaction_dialog.dart';
 import '../widgets/filter_dialog.dart';
 import '../services/notification_service.dart';
 
 import 'notes_list_page.dart';
 import 'settings_page.dart';
 import 'todo_list_page.dart';
+import 'finance_page.dart';
 
-// Item gabungan untuk ditampilkan di kalender: bisa Todo atau Note
+// Item gabungan untuk ditampilkan di kalender: bisa Todo, Note, atau Transaction
 class _CalendarItem {
   final Todo? todo;
   final Note? note;
-  _CalendarItem.fromTodo(this.todo) : note = null;
-  _CalendarItem.fromNote(this.note) : todo = null;
+  final Transaction? transaction;
+  _CalendarItem.fromTodo(this.todo)
+      : note = null,
+        transaction = null;
+  _CalendarItem.fromNote(this.note)
+      : todo = null,
+        transaction = null;
+  _CalendarItem.fromTransaction(this.transaction)
+      : todo = null,
+        note = null;
 }
 
 class CalendarPage extends StatefulWidget {
@@ -37,10 +51,12 @@ class CalendarPage extends StatefulWidget {
 class _CalendarPageState extends State<CalendarPage> {
   final TodoRepository _todoRepository = TodoRepository();
   final NoteRepository _noteRepository = NoteRepository();
+  final TransactionRepository _transactionRepository = TransactionRepository();
   final NotificationService _notifService = NotificationService();
 
   List<Todo> _todos = [];
   List<Note> _notes = [];
+  List<Transaction> _transactions = [];
   bool _isLoading = true;
 
   DateTime _focusedDay = DateTime.now();
@@ -63,10 +79,12 @@ class _CalendarPageState extends State<CalendarPage> {
     setState(() => _isLoading = true);
     final todos = await _todoRepository.getAll();
     final notes = await _noteRepository.getAll();
+    final transactions = await _transactionRepository.getAll();
     setState(() {
       _todos = todos;
       _notes = notes;
-      _itemsByDate = _groupByDate(todos, notes);
+      _transactions = transactions;
+      _itemsByDate = _groupByDate(todos, notes, transactions);
       _isLoading = false;
     });
   }
@@ -76,7 +94,7 @@ class _CalendarPageState extends State<CalendarPage> {
   }
 
   Map<DateTime, List<_CalendarItem>> _groupByDate(
-      List<Todo> todos, List<Note> notes) {
+      List<Todo> todos, List<Note> notes, List<Transaction> transactions) {
     final Map<DateTime, List<_CalendarItem>> map = {};
 
     void addItem(DateTime date, _CalendarItem item) {
@@ -93,6 +111,9 @@ class _CalendarPageState extends State<CalendarPage> {
     }
     for (final note in notes) {
       addItem(note.date, _CalendarItem.fromNote(note));
+    }
+    for (final transaction in transactions) {
+      addItem(transaction.date, _CalendarItem.fromTransaction(transaction));
     }
 
     return map;
@@ -120,6 +141,13 @@ class _CalendarPageState extends State<CalendarPage> {
         .toList();
   }
 
+  List<Transaction> _getTransactionsForDay(DateTime day) {
+    return _getItemsForDay(day)
+        .where((i) => i.transaction != null)
+        .map((i) => i.transaction!)
+        .toList();
+  }
+
   // Terapkan filter kategori & priority (dipindah dari TodoListPage)
   List<Todo> _applyFilter(List<Todo> todos) {
     return todos.where((todo) {
@@ -131,6 +159,57 @@ class _CalendarPageState extends State<CalendarPage> {
       }
       return true;
     }).toList();
+  }
+
+  Future<void> _addTransactionForSelectedDay() async {
+    await showDialog(
+      context: context,
+      builder: (_) => AddEditTransactionDialog(
+        initialDate: _selectedDay,
+        onSave: (newTx) async {
+          await _transactionRepository.insert(newTx);
+          await _loadData();
+        },
+      ),
+    );
+  }
+
+  Future<void> _editTransaction(Transaction transaction) async {
+    await showDialog(
+      context: context,
+      builder: (_) => AddEditTransactionDialog(
+        transaction: transaction,
+        onSave: (updated) async {
+          await _transactionRepository.update(updated);
+          await _loadData();
+        },
+      ),
+    );
+  }
+
+  Future<void> _deleteTransaction(Transaction transaction) async {
+    final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (_) => AlertDialog(
+            title: const Text('Hapus Transaksi'),
+            content: Text('Yakin ingin menghapus "${transaction.title}"?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Batal'),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Hapus'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed) return;
+    await _transactionRepository.delete(transaction.id);
+    await _loadData();
   }
 
   Future<void> _addNoteForSelectedDay() async {
@@ -250,6 +329,7 @@ class _CalendarPageState extends State<CalendarPage> {
     final selectedTodos = _applyFilter(_getTodosForDay(_selectedDay))
       ..sort((a, b) => b.priority.index.compareTo(a.priority.index));
     final selectedNotes = _getNotesForDay(_selectedDay);
+    final selectedTransactions = _getTransactionsForDay(_selectedDay);
 
     return Scaffold(
       appBar: AppBar(
@@ -262,7 +342,7 @@ class _CalendarPageState extends State<CalendarPage> {
               Navigator.push(
                 context,
                 MaterialPageRoute(builder: (_) => const NotesListPage()),
-              );
+              ).then((_) => _loadData());
             },
           ),
           IconButton(
@@ -272,7 +352,17 @@ class _CalendarPageState extends State<CalendarPage> {
               Navigator.push(
                 context,
                 MaterialPageRoute(builder: (_) => const TodoListPage()),
-              );
+              ).then((_) => _loadData());
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.account_balance_wallet),
+            tooltip: 'Keuangan',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const FinancePage()),
+              ).then((_) => _loadData());
             },
           ),
           IconButton(
@@ -358,7 +448,7 @@ class _CalendarPageState extends State<CalendarPage> {
                         color: Theme.of(context).colorScheme.primary,
                         shape: BoxShape.circle,
                       ),
-                      markersMaxCount: 3,
+                      markersMaxCount: 4,
                     ),
                     // marker custom: todo = merah, note = biru
                     calendarBuilders: CalendarBuilders(
@@ -367,6 +457,8 @@ class _CalendarPageState extends State<CalendarPage> {
                         if (items.isEmpty) return null;
                         final hasTodo = items.any((i) => i.todo != null);
                         final hasNote = items.any((i) => i.note != null);
+                        final hasTransaction =
+                            items.any((i) => i.transaction != null);
                         return Positioned(
                           bottom: 1,
                           child: Row(
@@ -394,6 +486,17 @@ class _CalendarPageState extends State<CalendarPage> {
                                     shape: BoxShape.circle,
                                   ),
                                 ),
+                              if (hasTransaction)
+                                Container(
+                                  margin:
+                                      const EdgeInsets.symmetric(horizontal: 1),
+                                  width: 6,
+                                  height: 6,
+                                  decoration: const BoxDecoration(
+                                    color: Colors.green,
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
                             ],
                           ),
                         );
@@ -416,6 +519,15 @@ class _CalendarPageState extends State<CalendarPage> {
                               fontSize: 14, fontWeight: FontWeight.w600),
                         ),
                       ),
+                      IconButton(
+                        onPressed: _addTransactionForSelectedDay,
+                        icon: const Icon(Icons.attach_money, size: 18),
+                        tooltip: 'Tambah Transaksi',
+                        color: Colors.green[700],
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                      ),
+                      const SizedBox(width: 12),
                       TextButton.icon(
                         onPressed: _addNoteForSelectedDay,
                         icon: const Icon(Icons.note_add, size: 16),
@@ -425,13 +537,26 @@ class _CalendarPageState extends State<CalendarPage> {
                   ),
                 ),
                 Expanded(
-                  child: (selectedTodos.isEmpty && selectedNotes.isEmpty)
+                  child: (selectedTodos.isEmpty &&
+                          selectedNotes.isEmpty &&
+                          selectedTransactions.isEmpty)
                       ? _buildEmptyState()
                       : RefreshIndicator(
                           onRefresh: _loadData,
                           child: ListView(
                             padding: const EdgeInsets.symmetric(horizontal: 16),
                             children: [
+                              if (selectedTransactions.isNotEmpty) ...[
+                                _sectionLabel(
+                                    '💰 Transaksi (${selectedTransactions.length})'),
+                                ...selectedTransactions
+                                    .map((t) => TransactionCard(
+                                          transaction: t,
+                                          onTap: () => _editTransaction(t),
+                                          onDelete: () => _deleteTransaction(t),
+                                        )),
+                                const SizedBox(height: 8),
+                              ],
                               if (selectedNotes.isNotEmpty) ...[
                                 _sectionLabel(
                                     '📓 Note (${selectedNotes.length})'),
@@ -507,7 +632,7 @@ class _CalendarPageState extends State<CalendarPage> {
           Icon(Icons.event_available, size: 80, color: Colors.grey[400]),
           const SizedBox(height: 16),
           Text(
-            'Tidak ada todo atau note di tanggal ini',
+            'Tidak ada todo, note, atau transaksi di tanggal ini',
             style: TextStyle(fontSize: 16, color: Colors.grey[600]),
           ),
         ],
